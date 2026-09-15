@@ -577,8 +577,11 @@
     try {
       const result = await PplxExport.listProjectThreads({
         resolveMissing: Boolean(options.resolveMissing),
-        onProgress: ({ rows }) => {
-          status.textContent = `Loading sessions… (${rows} unique)`;
+        onProgress: ({ rows, withUrl }) => {
+          status.textContent =
+            typeof withUrl === "number"
+              ? `Loading sessions… (${withUrl} with links · ${rows} total)`
+              : `Loading sessions… (${rows} unique)`;
           setBulkProgress({
             visible: true,
             indeterminate: true,
@@ -620,7 +623,7 @@
       liveStatus.textContent =
         `${result.threads.length} threads with links` +
         (missing.length
-          ? ` · ${missing.length} without links (use Find missing)`
+          ? ` · ${missing.length} without links (use Find missing — Library hides most URLs in the DOM)`
           : "");
 
       const readyItems = result.threads.map((t, i) => {
