@@ -624,6 +624,24 @@ async function runBulkJob(job) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "pplx-inject-harvester") {
+    (async () => {
+      try {
+        const tabId = sender.tab?.id;
+        if (tabId == null) throw new Error("Missing tab for harvester inject.");
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          files: ["lib/page-harvest.js"],
+        });
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === "pplx-download") {
     (async () => {
       try {
