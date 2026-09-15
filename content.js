@@ -10,6 +10,7 @@
   let exporting = false;
   let defaultFormat = "md";
   let bulkBusy = false;
+  let bulkListBusy = false;
   let bulkPollTimer = null;
   const BULK_JOB_KEY = "pplxBulkJob";
 
@@ -398,7 +399,7 @@
   function getPageKind() {
     const path = location.pathname || "";
     if (/\/search\//.test(path) || /\/page\//.test(path)) return "thread";
-    if (/\/projects\/[^/]+/.test(path)) return "project";
+    if (/\/projects\/[^/]+/.test(path) || /^\/library\/?$/.test(path)) return "bulk";
     return "other";
   }
 
@@ -408,7 +409,7 @@
   }
 
   function ensureBulkUi() {
-    if (getPageKind() !== "project") return null;
+    if (getPageKind() !== "bulk") return null;
 
     let panel = document.getElementById(BULK_ID);
     if (panel) {
@@ -440,7 +441,7 @@
     panel = document.createElement("div");
     panel.id = BULK_ID;
     panel.innerHTML = `
-      <button type="button" class="pplx-bulk-launch" title="Bulk export project threads" aria-label="Bulk export">
+      <button type="button" class="pplx-bulk-launch" title="Bulk export threads" aria-label="Bulk export">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M12 3v12"></path>
           <path d="M7 10l5 5 5-5"></path>
@@ -453,7 +454,7 @@
           <strong>Bulk export</strong>
           <button type="button" class="pplx-bulk-close" aria-label="Close">×</button>
         </header>
-        <p class="pplx-bulk-status">Finding threads in this project…</p>
+        <p class="pplx-bulk-status">Finding threads…</p>
         <div class="pplx-bulk-progress" aria-hidden="true">
           <div class="pplx-bulk-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Export progress">
             <div class="pplx-bulk-progress-bar"></div>
@@ -472,7 +473,7 @@
           <button type="button" class="pplx-bulk-start">Start export</button>
           <button type="button" class="pplx-bulk-cancel" hidden>Cancel</button>
         </div>
-        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). “Find missing” briefly navigates into rows without links (may leave the project page if navigation fails).</p>
+        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). “Find missing” briefly navigates into rows without links (may leave the list page if navigation fails).</p>
       </div>
     `;
     document.documentElement.appendChild(panel);
@@ -559,6 +560,7 @@
     const start = panel.querySelector(".pplx-bulk-start");
     const resolveBtn = panel.querySelector(".pplx-bulk-resolve");
 
+    bulkListBusy = true;
     status.textContent = options.resolveMissing
       ? "Fetching missing links (brief navigation)…"
       : "Scrolling the Sessions list…";
@@ -594,20 +596,28 @@
         },
       });
 
-      panel._bulkData = result;
+      // Re-bind after possible SPA navigations during Find missing
+      const live = document.getElementById(BULK_ID) || ensureBulkUi();
+      if (!live) return;
+      const liveStatus = live.querySelector(".pplx-bulk-status") || status;
+      const liveList = live.querySelector(".pplx-bulk-list") || list;
+      const liveStart = live.querySelector(".pplx-bulk-start") || start;
+      const liveResolve = live.querySelector(".pplx-bulk-resolve") || resolveBtn;
+
+      live._bulkData = result;
       syncBulkFormatUi();
-      const metaEl = panel.querySelector(".pplx-bulk-meta");
+      const metaEl = live.querySelector(".pplx-bulk-meta");
       if (metaEl) metaEl.textContent = result.project.name;
       setBulkProgress({ visible: false });
 
       if (!result.threads.length && !result.missing?.length) {
-        status.textContent = "No threads found in the Sessions table.";
-        if (resolveBtn) resolveBtn.disabled = false;
+        liveStatus.textContent = "No threads found in the Sessions table.";
+        if (liveResolve) liveResolve.disabled = false;
         return;
       }
 
       const missing = result.missing || [];
-      status.textContent =
+      liveStatus.textContent =
         `${result.threads.length} threads with links` +
         (missing.length
           ? ` · ${missing.length} without links (use Find missing)`
@@ -628,12 +638,18 @@
         return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><em>${date || "—"}</em> ${title} <small>(no link)</small></span></label>`;
       });
 
-      list.innerHTML = [...readyItems, ...missingItems].join("");
-      start.disabled = !result.threads.length;
-      if (resolveBtn) resolveBtn.disabled = !missing.length;
+      liveList.innerHTML = [...readyItems, ...missingItems].join("");
+      liveStart.disabled = !result.threads.length;
+      if (liveResolve) liveResolve.disabled = !missing.length;
     } catch (err) {
-      status.textContent = err.message || "Could not load threads";
-      if (resolveBtn) resolveBtn.disabled = false;
+      const live = document.getElementById(BULK_ID);
+      const liveStatus = live?.querySelector(".pplx-bulk-status");
+      if (liveStatus) liveStatus.textContent = err.message || "Could not load threads";
+      const liveResolve = live?.querySelector(".pplx-bulk-resolve");
+      if (liveResolve) liveResolve.disabled = false;
+    } finally {
+      bulkListBusy = false;
+      syncVisibility();
     }
   }
 
@@ -824,7 +840,7 @@
   function syncVisibility() {
     const kind = getPageKind();
     const showFab = kind === "thread";
-    const showBulk = kind === "project";
+    const showBulk = kind === "bulk";
 
     if (showFab) {
       ensureUi();
@@ -846,6 +862,13 @@
       if (bulk) {
         bulk.classList.remove("is-hidden");
         bulk.removeAttribute("hidden");
+      }
+    } else if (bulkListBusy || bulkBusy) {
+      // Keep the panel mounted across SPA hops (Find missing / export)
+      const bulk = document.getElementById(BULK_ID);
+      if (bulk) {
+        bulk.classList.add("is-hidden");
+        bulk.setAttribute("hidden", "");
       }
     } else {
       removeBulkUi();
@@ -911,7 +934,7 @@
       const status = await chrome.runtime.sendMessage({ type: "pplx-bulk-status" });
       const job = status?.job;
       if (!job) return;
-      if (getPageKind() !== "project") {
+      if (getPageKind() !== "bulk") {
         syncVisibility();
         return;
       }

@@ -1,6 +1,6 @@
 # Perplexport
 
-Chrome extension that exports Perplexity chats to Markdown, JSON, or the clipboard — including bulk ZIP export from a project.
+Chrome extension that exports Perplexity chats to Markdown, JSON, or the clipboard — including bulk ZIP export from Library or a project.
 
 <p align="center">
   <img src="docs/thread-export.png" alt="Thread export button with Markdown, JSON, and Copy Markdown options" width="320" />
@@ -27,19 +27,19 @@ Chrome extension that exports Perplexity chats to Markdown, JSON, or the clipboa
 
 ![Thread export menu](docs/thread-export.png)
 
-### Bulk from a project
+### Bulk from Library or a project
 
-1. Open a project (`/projects/…`) with the Sessions list
+1. Open [Library](https://www.perplexity.ai/library) (`/library`) or a project (`/projects/…`) with the Sessions list
 2. Click **Bulk** in the bottom-right
-3. Wait while the list scrolls and collects threads (rows without `/search/` links are listed as missing)
+3. Wait while the list scrolls and collects threads (Library keeps loading as you scroll; the extension scrolls for you)
 4. Pick **Markdown** or **JSON**, select threads, then **Start export**
 5. Each thread opens in a background tab, is scraped, then closed. Results download as ZIP archive(s)
 
 ![Bulk export panel](docs/bulk-export.png)
 
-**Auto-batching:** large jobs are split automatically — roughly every **30 threads** or **~12 MB** of content — into `project-part-01.zip`, `project-part-02.zip`, and so on. Small jobs stay a single `project.zip`. Filenames inside each ZIP: `YYYY-MM-DD-title.md` / `.json`.
+**Auto-batching:** large jobs are split automatically — roughly every **30 threads** or **~12 MB** of content — into `library-part-01.zip` / `project-part-01.zip`, and so on. Small jobs stay a single ZIP. Filenames inside each ZIP: `YYYY-MM-DD-title.md` / `.json`.
 
-Use **Find missing** only when some Sessions rows have no `/search/` link; it briefly navigates into those rows and can leave the project page if back-navigation fails.
+Use **Find missing** only when some Sessions rows have no `/search/` link; it briefly navigates into those rows and can leave the list page if back-navigation fails.
 
 Everything runs locally in the browser. Bulk export needs the `tabs` permission so each thread can be opened in the background.
 
