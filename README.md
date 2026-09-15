@@ -2,6 +2,12 @@
 
 Chrome extension that exports Perplexity chats to Markdown, JSON, or the clipboard — including bulk ZIP export from a project.
 
+<p align="center">
+  <img src="docs/thread-export.png" alt="Thread export button with Markdown, JSON, and Copy Markdown options" width="320" />
+  &nbsp;&nbsp;
+  <img src="docs/bulk-export.png" alt="Bulk export panel on a project Sessions page" width="420" />
+</p>
+
 ## Install (unpacked / developer mode)
 
 1. Clone this repository
@@ -13,16 +19,27 @@ Chrome extension that exports Perplexity chats to Markdown, JSON, or the clipboa
 ## Usage
 
 ### Single thread
+
 1. Open a chat (`/search/…`)
-2. Click **Markdown** / **JSON** (last used format is remembered)
+2. Use the button in the bottom-right:
+   - Click the main label to export in the last-used format (Markdown or JSON)
+   - Open the ▾ menu for **Download Markdown**, **Download JSON**, or **Copy Markdown**
+
+![Thread export menu](docs/thread-export.png)
 
 ### Bulk from a project
+
 1. Open a project (`/projects/…`) with the Sessions list
 2. Click **Bulk** in the bottom-right
-3. The extension scrolls the list, finds `/search/` links, and lets you select threads
-4. **Start export** opens each thread in the background, collects content temporarily, and downloads a single **ZIP** at the end
+3. Wait while the list scrolls and collects threads (rows without `/search/` links are listed as missing)
+4. Pick **Markdown** or **JSON**, select threads, then **Start export**
+5. Each thread opens in a background tab, is scraped, then closed. Results download as ZIP archive(s)
 
-Filenames inside the ZIP: `YYYY-MM-DD-title.md` / `.json`.
+![Bulk export panel](docs/bulk-export.png)
+
+**Auto-batching:** large jobs are split automatically — roughly every **30 threads** or **~12 MB** of content — into `project-part-01.zip`, `project-part-02.zip`, and so on. Small jobs stay a single `project.zip`. Filenames inside each ZIP: `YYYY-MM-DD-title.md` / `.json`.
+
+Use **Find missing** only when some Sessions rows have no `/search/` link; it briefly navigates into those rows and can leave the project page if back-navigation fails.
 
 Everything runs locally in the browser. Bulk export needs the `tabs` permission so each thread can be opened in the background.
 

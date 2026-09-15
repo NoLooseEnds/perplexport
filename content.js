@@ -343,6 +343,7 @@
           total: job.total,
           errors: job.errors,
           zipName: job.zipName,
+          zipNames: job.zipNames,
           collected: job.collected,
         });
       } else if (job.status === "error" || job.status === "cancelled") {
@@ -353,6 +354,8 @@
           failed: job.failed,
           total: job.total,
           errors: job.errors,
+          zipNames: job.zipNames,
+          zipName: job.zipName,
         });
       } else if (job.status === "running" && status.running) {
         onBulkProgress({
@@ -361,6 +364,7 @@
           failed: job.failed,
           total: job.total,
           collected: job.collected,
+          zipNames: job.zipNames,
           current: "…",
         });
       } else if (job.status === "running" && !status.running) {
@@ -370,6 +374,7 @@
           done: job.done,
           failed: job.failed,
           total: job.total,
+          zipNames: job.zipNames,
         });
       }
     } catch {
@@ -467,7 +472,7 @@
           <button type="button" class="pplx-bulk-start">Start export</button>
           <button type="button" class="pplx-bulk-cancel" hidden>Cancel</button>
         </div>
-        <p class="pplx-bulk-hint">Choose a format, then start. Files are collected and downloaded as one <strong>ZIP</strong>. “Find missing” briefly navigates into rows without links (may leave the project page if navigation fails).</p>
+        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). “Find missing” briefly navigates into rows without links (may leave the project page if navigation fails).</p>
       </div>
     `;
     document.documentElement.appendChild(panel);
@@ -754,10 +759,16 @@
         total: message.total || message.done || 1,
         visible: true,
       });
+      const zips = message.zipNames?.length
+        ? message.zipNames
+        : message.zipName
+          ? [message.zipName]
+          : [];
       let text =
         `Done: ${message.done}/${message.total} OK` +
-        (message.failed ? `, ${message.failed} failed` : "") +
-        (message.zipName ? ` · ${message.zipName}` : "");
+        (message.failed ? `, ${message.failed} failed` : "");
+      if (zips.length === 1) text += ` · ${zips[0]}`;
+      else if (zips.length > 1) text += ` · ${zips.length} ZIPs`;
       if (message.errors?.length) {
         const first = message.errors[0];
         text += ` · e.g. ${String(first.error || "").slice(0, 80)}`;
@@ -767,7 +778,9 @@
       return;
     }
     if (message.status === "zipping") {
-      status.textContent = `Packing ZIP (${message.collected || message.done} files)…`;
+      status.textContent = message.part
+        ? `Packing ZIP part ${message.part} (${message.collected || message.done} files)…`
+        : `Packing ZIP (${message.collected || message.done} files)…`;
       setBulkProgress({
         current: message.total || message.done || 0,
         total: message.total || message.done || 1,

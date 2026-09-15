@@ -5,6 +5,9 @@ const BULK_FILES_KEY = "pplxBulkFiles";
 const BULK_CANCEL_KEY = "pplxBulkCancel";
 const OFFSCREEN_URL = "offscreen.html";
 const MAX_ZIP_BYTES = self.PplxExport.MAX_ZIP_DOWNLOAD_BYTES || 20 * 1024 * 1024;
+/** Soft limits — flush a ZIP early so large jobs stay under the hard cap. */
+const BATCH_MAX_FILES = 30;
+const BATCH_SOFT_BYTES = 12 * 1024 * 1024;
 
 /** Single-flight lock — only one bulk job at a time (also mirrored in storage). */
 let bulkRunning = false;
@@ -12,6 +15,14 @@ let offscreenCreating = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function utf8ByteLength(text) {
+  try {
+    return new TextEncoder().encode(String(text ?? "")).length;
+  } catch {
+    return String(text ?? "").length;
+  }
 }
 
 function sanitizeFilename(name, fallback = "perplexport.md") {
@@ -343,9 +354,54 @@ async function runBulkJob(job) {
   let done = 0;
   let failed = 0;
   const errors = [];
-  const collected = [];
   const usedNames = new Set();
+  const zipNames = [];
+  let batch = [];
+  let batchBytes = 0;
+  let partIndex = 0;
+  let multiMode = false;
+  const baseFolder = folder || "perplexport";
   const state = { ...job, status: "running", done, failed, total, errors };
+
+  const flushBatch = async ({ force = false, moreComing = false } = {}) => {
+    if (!batch.length) return;
+    if (
+      !force &&
+      batch.length < BATCH_MAX_FILES &&
+      batchBytes < BATCH_SOFT_BYTES
+    ) {
+      return;
+    }
+
+    if (moreComing) multiMode = true;
+    partIndex += 1;
+
+    const zipFiles = batch.map((f) => ({
+      name: `${baseFolder}/${f.name}`,
+      content: f.content,
+    }));
+    const useParts = multiMode || partIndex > 1 || zipNames.length > 0;
+    const zipName = useParts
+      ? `${baseFolder}-part-${String(partIndex).padStart(2, "0")}.zip`
+      : `${baseFolder}.zip`;
+
+    await notifyOpener(openerTabId, {
+      type: "pplx-bulk-progress",
+      status: "zipping",
+      done,
+      failed,
+      total,
+      collected: batch.length,
+      part: useParts ? partIndex : null,
+      zipName,
+    });
+
+    // First ZIP may prompt Save As; later parts download quietly
+    await downloadZip(zipFiles, zipName, partIndex === 1);
+    zipNames.push(zipName);
+    batch = [];
+    batchBytes = 0;
+  };
 
   await writeJob(state);
   await clearCollected();
@@ -354,6 +410,12 @@ async function runBulkJob(job) {
   try {
     for (let i = 0; i < threads.length; i += 1) {
       if (await isBulkCancelled()) {
+        // Best-effort: save whatever we already collected
+        try {
+          await flushBatch({ force: true });
+        } catch {
+          // ignore zip errors on cancel
+        }
         const cancelled = {
           ...state,
           status: "cancelled",
@@ -361,7 +423,9 @@ async function runBulkJob(job) {
           failed,
           total,
           errors,
-          collected: collected.length,
+          collected: done,
+          zipNames,
+          zipName: zipNames[zipNames.length - 1] || null,
           error: "Cancelled by user.",
           finishedAt: new Date().toISOString(),
         };
@@ -375,7 +439,9 @@ async function runBulkJob(job) {
           failed,
           total,
           errors,
-          collected: collected.length,
+          collected: done,
+          zipNames,
+          zipName: zipNames[zipNames.length - 1] || null,
           error: "Cancelled by user.",
         });
         return cancelled;
@@ -418,14 +484,56 @@ async function runBulkJob(job) {
           throw new Error("Empty export result");
         }
 
+        const contentBytes = utf8ByteLength(exported.content);
+        if (contentBytes > MAX_ZIP_BYTES) {
+          throw new Error(
+            `Thread export is too large (${(contentBytes / (1024 * 1024)).toFixed(1)} MB) for a ZIP part.`
+          );
+        }
+
+        // Flush before adding if this file would push the soft limit / file cap
+        if (
+          batch.length &&
+          (batch.length >= BATCH_MAX_FILES ||
+            batchBytes + contentBytes >= BATCH_SOFT_BYTES)
+        ) {
+          try {
+            await flushBatch({ force: true, moreComing: true });
+          } catch (zipErr) {
+            batch = [];
+            batchBytes = 0;
+            const fatal = new Error(
+              zipErr?.message || "Failed to write ZIP batch."
+            );
+            fatal.pplxZipFlush = true;
+            throw fatal;
+          }
+        }
+
         const name = uniqueZipName(
           exported.filename ||
             `thread-${i + 1}.${format === "json" ? "json" : "md"}`,
           usedNames
         );
-        collected.push({ name, content: exported.content });
+        batch.push({ name, content: exported.content });
+        batchBytes += contentBytes;
+
+        try {
+          await flushBatch({
+            moreComing: i < threads.length - 1,
+          });
+        } catch (zipErr) {
+          batch = [];
+          batchBytes = 0;
+          const fatal = new Error(
+            zipErr?.message || "Failed to write ZIP batch."
+          );
+          fatal.pplxZipFlush = true;
+          throw fatal;
+        }
         done += 1;
       } catch (err) {
+        if (err?.pplxZipFlush) throw err;
         failed += 1;
         errors.push({
           url: thread.url,
@@ -448,7 +556,8 @@ async function runBulkJob(job) {
         failed,
         total,
         errors,
-        collected: collected.length,
+        collected: done,
+        zipNames,
       });
       await writeJob(state);
       await notifyOpener(openerTabId, {
@@ -459,29 +568,13 @@ async function runBulkJob(job) {
         failed,
         current: thread.title || thread.url,
         status: "tick",
-        collected: collected.length,
+        collected: done,
+        zipNames,
       });
       await sleep(600);
     }
 
-    let zipName = null;
-    if (collected.length) {
-      await notifyOpener(openerTabId, {
-        type: "pplx-bulk-progress",
-        status: "zipping",
-        done,
-        failed,
-        total,
-        collected: collected.length,
-      });
-
-      const zipFiles = collected.map((f) => ({
-        name: folder ? `${folder}/${f.name}` : f.name,
-        content: f.content,
-      }));
-      zipName = `${folder || "perplexport"}.zip`;
-      await downloadZip(zipFiles, zipName, true);
-    }
+    await flushBatch({ force: true, moreComing: false });
 
     await clearCollected();
     await clearCancelFlag();
@@ -493,8 +586,9 @@ async function runBulkJob(job) {
       failed,
       total,
       errors,
-      zipName,
-      collected: collected.length,
+      zipName: zipNames[0] || null,
+      zipNames,
+      collected: done,
       finishedAt: new Date().toISOString(),
     };
     await writeJob(finished);
@@ -505,13 +599,22 @@ async function runBulkJob(job) {
       failed,
       total,
       errors,
-      zipName,
-      collected: collected.length,
+      zipName: zipNames[0] || null,
+      zipNames,
+      collected: done,
     });
     return finished;
   } catch (err) {
     return failJob(
-      { ...state, done, failed, total, errors, collected: collected.length },
+      {
+        ...state,
+        done,
+        failed,
+        total,
+        errors,
+        collected: done,
+        zipNames,
+      },
       err,
       openerTabId
     );
