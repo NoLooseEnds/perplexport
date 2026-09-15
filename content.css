@@ -284,6 +284,32 @@
   border-radius: 10px;
   padding: 4px;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #145a50 #e8eeec;
+}
+
+#pplx-export-bulk .pplx-bulk-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+#pplx-export-bulk .pplx-bulk-list::-webkit-scrollbar-track {
+  background: #e8eeec;
+  border-radius: 8px;
+  margin: 4px 0;
+}
+
+#pplx-export-bulk .pplx-bulk-list::-webkit-scrollbar-thumb {
+  background: #145a50;
+  border-radius: 8px;
+  border: 2px solid #e8eeec;
+}
+
+#pplx-export-bulk .pplx-bulk-list::-webkit-scrollbar-thumb:hover {
+  background: #0f463e;
+}
+
+#pplx-export-bulk .pplx-bulk-list::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 #pplx-export-bulk .pplx-bulk-item {
