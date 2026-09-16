@@ -5,12 +5,13 @@ const BULK_CANCEL_KEY = "pplxBulkCancel";
 const BULK_ACTIVE_TAB_KEY = "pplxBulkActiveTab";
 const EXPORT_PAYLOAD_PREFIX = "pplxExportPayload_";
 const OFFSCREEN_URL = "offscreen.html";
-const MAX_ZIP_BYTES = self.PplxExport.MAX_ZIP_DOWNLOAD_BYTES || 20 * 1024 * 1024;
+const MAX_ZIP_BYTES = self.PplxExport.MAX_ZIP_DOWNLOAD_BYTES || 14 * 1024 * 1024;
 /** Soft limits — flush a ZIP early so large jobs stay under the hard cap. */
 const BATCH_MAX_FILES = 30;
-const BATCH_SOFT_BYTES = 12 * 1024 * 1024;
-/** Avoid giant structured-clone payloads over tabs.sendMessage. */
+const BATCH_SOFT_BYTES = 10 * 1024 * 1024;
+/** Avoid giant structured-clone payloads over tabs.sendMessage / session storage. */
 const MAX_INLINE_EXPORT_CHARS = 1_500_000;
+const MAX_SESSION_EXPORT_BYTES = 8 * 1024 * 1024;
 
 /** Single-flight lock — only one bulk job at a time (also mirrored in storage). */
 let bulkRunning = false;
@@ -165,26 +166,44 @@ async function downloadData({ filename, url, content, mime, saveAs }) {
 
 function waitForDownloadOutcome(downloadId, timeoutMs = 15 * 60 * 1000) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       chrome.downloads.onChanged.removeListener(onChanged);
-      reject(new Error("Download timed out waiting for completion."));
+      fn(value);
+    };
+
+    const timer = setTimeout(() => {
+      finish(reject, new Error("Download timed out waiting for completion."));
     }, timeoutMs);
 
     function onChanged(delta) {
       if (delta.id !== downloadId) return;
       const state = delta.state?.current;
       if (state === "complete") {
-        clearTimeout(timer);
-        chrome.downloads.onChanged.removeListener(onChanged);
-        resolve({ ok: true, downloadId });
+        finish(resolve, { ok: true, downloadId });
       } else if (state === "interrupted") {
-        clearTimeout(timer);
-        chrome.downloads.onChanged.removeListener(onChanged);
-        reject(new Error("Download was cancelled or interrupted."));
+        finish(reject, new Error("Download was cancelled or interrupted."));
       }
     }
 
     chrome.downloads.onChanged.addListener(onChanged);
+
+    // Catch races where the download finished before the listener attached
+    chrome.downloads
+      .search({ id: downloadId })
+      .then((items) => {
+        const item = items?.[0];
+        if (!item) return;
+        if (item.state === "complete") {
+          finish(resolve, { ok: true, downloadId });
+        } else if (item.state === "interrupted") {
+          finish(reject, new Error("Download was cancelled or interrupted."));
+        }
+      })
+      .catch(() => {});
   });
 }
 
@@ -457,7 +476,7 @@ async function failJob(job, err, openerTabId) {
 }
 
 async function runBulkJob(job) {
-  const { threads, format, folder, openerTabId } = job;
+  const { threads, format, folder, openerTabId, projectName, projectUrl } = job;
   const total = threads.length;
   let done = 0;
   let failed = 0;
@@ -588,7 +607,8 @@ async function runBulkJob(job) {
           quiet: true,
           collect: true,
           meta: {
-            project: thread.projectTag || null,
+            project: thread.projectTag || projectName || null,
+            projectUrl: projectUrl || null,
             files: thread.files || [],
           },
         });
@@ -599,6 +619,11 @@ async function runBulkJob(job) {
         }
 
         const contentBytes = utf8ByteLength(exported.content);
+        if (contentBytes > MAX_SESSION_EXPORT_BYTES) {
+          throw new Error(
+            `Thread export is too large (${(contentBytes / (1024 * 1024)).toFixed(1)} MB) to transfer safely. Skip this thread or export it alone.`
+          );
+        }
         if (contentBytes > MAX_ZIP_BYTES) {
           throw new Error(
             `Thread export is too large (${(contentBytes / (1024 * 1024)).toFixed(1)} MB) for a ZIP part.`
@@ -858,6 +883,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           format: message.format === "json" ? "json" : "md",
           folder,
           openerTabId,
+          projectName: message.projectName
+            ? String(message.projectName).slice(0, 200)
+            : null,
+          projectUrl: message.projectUrl
+            ? String(message.projectUrl).slice(0, 500)
+            : null,
           startedAt: new Date().toISOString(),
         };
 

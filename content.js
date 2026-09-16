@@ -16,6 +16,7 @@
   const BULK_JOB_KEY = "pplxBulkJob";
   const BULK_LIST_CACHE_KEY = "pplxBulkListCache";
   const MAX_INLINE_EXPORT_CHARS = 1_500_000;
+  const MAX_SESSION_EXPORT_CHARS = 8_000_000;
 
   function normalizeFormat(value) {
     return value === "json" ? "json" : "md";
@@ -197,6 +198,11 @@
   }
 
   async function packageCollectResult(filename, content, mime) {
+    if (typeof content === "string" && content.length > MAX_SESSION_EXPORT_CHARS) {
+      throw new Error(
+        `Thread export is too large (${(content.length / (1024 * 1024)).toFixed(1)} MB) to transfer safely.`
+      );
+    }
     if (
       typeof content === "string" &&
       content.length > MAX_INLINE_EXPORT_CHARS
@@ -204,9 +210,16 @@
       const storageKey = `pplxExportPayload_${Date.now()}_${Math.random()
         .toString(16)
         .slice(2)}`;
-      await chrome.storage.session.set({
-        [storageKey]: { content, filename, mime },
-      });
+      try {
+        await chrome.storage.session.set({
+          [storageKey]: { content, filename, mime },
+        });
+      } catch (err) {
+        throw new Error(
+          err?.message ||
+            "Could not store export payload (session storage quota). Try a smaller thread."
+        );
+      }
       return { ok: true, filename, storageKey, mime, bytes: content.length };
     }
     return { ok: true, filename, content, mime };
@@ -784,10 +797,7 @@
         },
       });
 
-      // Re-bind after possible SPA navigations during Find missing
-      const live = document.getElementById(BULK_ID) || ensureBulkUi();
-      if (!live) return;
-
+      // Persist results even if the panel DOM is briefly gone
       try {
         await chrome.storage.session.set({
           [BULK_LIST_CACHE_KEY]: {
@@ -800,6 +810,11 @@
       } catch {
         // ignore
       }
+
+      // Re-bind after possible SPA navigations during Find missing
+      const live = document.getElementById(BULK_ID) || ensureBulkUi();
+      if (!live) return;
+
       setBulkProgress({ visible: false });
       renderBulkListResult(live, result);
     } catch (err) {
@@ -865,6 +880,8 @@
         threads: selected,
         format,
         folder,
+        projectName: data.project?.name || null,
+        projectUrl: data.project?.url || null,
       });
       if (!result?.ok) throw new Error(result?.error || "Bulk start failed");
       status.textContent = `Exporting 0/${selected.length}…`;

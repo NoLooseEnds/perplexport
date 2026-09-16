@@ -11,6 +11,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     let objectUrl = null;
     let revokeTimer = null;
     let downloadListener = null;
+    let settled = false;
 
     const revoke = () => {
       if (revokeTimer) {
@@ -62,13 +63,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
 
       const outcome = await new Promise((resolve) => {
+        const finish = (result) => {
+          if (settled) return;
+          settled = true;
+          resolve(result);
+        };
+
         downloadListener = (delta) => {
           if (delta.id !== downloadId) return;
           const state = delta.state?.current;
           if (state === "complete") {
-            resolve({ ok: true, downloadId });
+            finish({ ok: true, downloadId });
           } else if (state === "interrupted") {
-            resolve({
+            finish({
               ok: false,
               error: "Download was cancelled or interrupted.",
               downloadId,
@@ -77,9 +84,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         };
         chrome.downloads.onChanged.addListener(downloadListener);
 
-        // Fallback if Save As stays open for a very long time
+        // Catch races where the download finished before the listener attached
+        chrome.downloads
+          .search({ id: downloadId })
+          .then((items) => {
+            const item = items?.[0];
+            if (!item) return;
+            if (item.state === "complete") {
+              finish({ ok: true, downloadId });
+            } else if (item.state === "interrupted") {
+              finish({
+                ok: false,
+                error: "Download was cancelled or interrupted.",
+                downloadId,
+              });
+            }
+          })
+          .catch(() => {});
+
         revokeTimer = setTimeout(() => {
-          resolve({
+          finish({
             ok: false,
             error: "Download timed out waiting for completion.",
             downloadId,
