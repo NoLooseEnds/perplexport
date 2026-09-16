@@ -290,26 +290,48 @@ async function ensureOffscreen() {
 async function sendOffscreenDownload(payload, attempts = 4) {
   let lastError = null;
   for (let i = 0; i < attempts; i += 1) {
+    let objectUrl = null;
     try {
       await ensureOffscreen();
-      const result = await chrome.runtime.sendMessage({
-        type: "pplx-offscreen-download",
-        ...payload,
+      const created = await chrome.runtime.sendMessage({
+        type: "pplx-offscreen-create-url",
+        base64: payload.base64,
+        mime: payload.mime || "application/zip",
       });
-      if (result?.ok) return result;
-      lastError = new Error(result?.error || "Offscreen ZIP download failed.");
+      if (!created?.ok || !created.url) {
+        throw new Error(created?.error || "Offscreen blob URL creation failed.");
+      }
+      objectUrl = created.url;
+
+      // chrome.downloads is only available in the service worker — not offscreen
+      const downloadId = await chrome.downloads.download({
+        url: objectUrl,
+        filename: sanitizeFilename(
+          payload.filename,
+          payload.mime?.includes("zip") ? "perplexport.zip" : "perplexport.md"
+        ),
+        saveAs: Boolean(payload.saveAs),
+      });
+      await waitForDownloadOutcome(downloadId);
+      return { ok: true, downloadId };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
       const fatal =
         /cancelled|interrupted|Unauthorized|timed out|too large/i.test(
           lastError.message
         );
       if (fatal) throw lastError;
-    } catch (err) {
-      lastError = err;
-      const fatal =
-        /cancelled|interrupted|Unauthorized|timed out|too large/i.test(
-          err?.message || String(err)
-        );
-      if (fatal) throw err;
+    } finally {
+      if (objectUrl) {
+        try {
+          await chrome.runtime.sendMessage({
+            type: "pplx-offscreen-revoke-url",
+            url: objectUrl,
+          });
+        } catch {
+          // ignore
+        }
+      }
     }
     await sleep(200 * (i + 1));
   }
