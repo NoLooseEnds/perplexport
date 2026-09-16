@@ -61,19 +61,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         saveAs: Boolean(message.saveAs),
       });
 
-      downloadListener = (delta) => {
-        if (delta.id !== downloadId) return;
-        const state = delta.state?.current;
-        if (state === "complete" || state === "interrupted") {
-          revoke();
-        }
-      };
-      chrome.downloads.onChanged.addListener(downloadListener);
+      const outcome = await new Promise((resolve) => {
+        downloadListener = (delta) => {
+          if (delta.id !== downloadId) return;
+          const state = delta.state?.current;
+          if (state === "complete") {
+            resolve({ ok: true, downloadId });
+          } else if (state === "interrupted") {
+            resolve({
+              ok: false,
+              error: "Download was cancelled or interrupted.",
+              downloadId,
+            });
+          }
+        };
+        chrome.downloads.onChanged.addListener(downloadListener);
 
-      // Fallback if the user leaves Save As open for a very long time
-      revokeTimer = setTimeout(revoke, 15 * 60 * 1000);
+        // Fallback if Save As stays open for a very long time
+        revokeTimer = setTimeout(() => {
+          resolve({
+            ok: false,
+            error: "Download timed out waiting for completion.",
+            downloadId,
+          });
+        }, 15 * 60 * 1000);
+      });
 
-      sendResponse({ ok: true, downloadId });
+      revoke();
+      sendResponse(outcome);
     } catch (err) {
       revoke();
       sendResponse({ ok: false, error: err?.message || String(err) });

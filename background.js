@@ -1,13 +1,16 @@
 importScripts("lib/zip.js");
 
 const BULK_KEY = "pplxBulkJob";
-const BULK_FILES_KEY = "pplxBulkFiles";
 const BULK_CANCEL_KEY = "pplxBulkCancel";
+const BULK_ACTIVE_TAB_KEY = "pplxBulkActiveTab";
+const EXPORT_PAYLOAD_PREFIX = "pplxExportPayload_";
 const OFFSCREEN_URL = "offscreen.html";
 const MAX_ZIP_BYTES = self.PplxExport.MAX_ZIP_DOWNLOAD_BYTES || 20 * 1024 * 1024;
 /** Soft limits — flush a ZIP early so large jobs stay under the hard cap. */
 const BATCH_MAX_FILES = 30;
 const BATCH_SOFT_BYTES = 12 * 1024 * 1024;
+/** Avoid giant structured-clone payloads over tabs.sendMessage. */
+const MAX_INLINE_EXPORT_CHARS = 1_500_000;
 
 /** Single-flight lock — only one bulk job at a time (also mirrored in storage). */
 let bulkRunning = false;
@@ -111,6 +114,7 @@ async function reconcileStaleBulkJob() {
     });
     await clearCollected();
     await clearCancelFlag();
+    await closeTrackedBulkTab();
     if (current.openerTabId) {
       await notifyOpener(current.openerTabId, {
         type: "pplx-bulk-progress",
@@ -131,6 +135,18 @@ const bulkReady = reconcileStaleBulkJob();
 async function downloadData({ filename, url, content, mime, saveAs }) {
   let downloadUrl = null;
   if (typeof content === "string") {
+    // Large single-file exports go through offscreen Blob (data: URLs break)
+    if (utf8ByteLength(content) > 750_000) {
+      await sendOffscreenDownload({
+        base64: self.PplxExport.bytesToBase64(
+          new TextEncoder().encode(content)
+        ),
+        filename: sanitizeFilename(filename, "perplexport.md"),
+        mime: mime || "text/plain;charset=utf-8",
+        saveAs: Boolean(saveAs),
+      });
+      return;
+    }
     downloadUrl = toDataUrl(content, mime);
   } else if (typeof url === "string" && url.startsWith("data:")) {
     downloadUrl = url;
@@ -138,10 +154,37 @@ async function downloadData({ filename, url, content, mime, saveAs }) {
     throw new Error("Downloads must use inline data (data: URL or content).");
   }
 
-  await chrome.downloads.download({
+  const downloadId = await chrome.downloads.download({
     url: downloadUrl,
     filename: sanitizeFilename(filename, "perplexport.md"),
     saveAs: Boolean(saveAs),
+  });
+
+  await waitForDownloadOutcome(downloadId);
+}
+
+function waitForDownloadOutcome(downloadId, timeoutMs = 15 * 60 * 1000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.downloads.onChanged.removeListener(onChanged);
+      reject(new Error("Download timed out waiting for completion."));
+    }, timeoutMs);
+
+    function onChanged(delta) {
+      if (delta.id !== downloadId) return;
+      const state = delta.state?.current;
+      if (state === "complete") {
+        clearTimeout(timer);
+        chrome.downloads.onChanged.removeListener(onChanged);
+        resolve({ ok: true, downloadId });
+      } else if (state === "interrupted") {
+        clearTimeout(timer);
+        chrome.downloads.onChanged.removeListener(onChanged);
+        reject(new Error("Download was cancelled or interrupted."));
+      }
+    }
+
+    chrome.downloads.onChanged.addListener(onChanged);
   });
 }
 
@@ -208,8 +251,18 @@ async function sendOffscreenDownload(payload, attempts = 4) {
       });
       if (result?.ok) return result;
       lastError = new Error(result?.error || "Offscreen ZIP download failed.");
+      const fatal =
+        /cancelled|interrupted|Unauthorized|timed out|too large/i.test(
+          lastError.message
+        );
+      if (fatal) throw lastError;
     } catch (err) {
       lastError = err;
+      const fatal =
+        /cancelled|interrupted|Unauthorized|timed out|too large/i.test(
+          err?.message || String(err)
+        );
+      if (fatal) throw err;
     }
     await sleep(200 * (i + 1));
   }
@@ -298,11 +351,66 @@ async function notifyOpener(openerTabId, message) {
 }
 
 async function clearCollected() {
+  // Legacy key cleanup from older builds
   try {
-    await chrome.storage.session.remove(BULK_FILES_KEY);
+    await chrome.storage.session.remove("pplxBulkFiles");
   } catch {
     // ignore
   }
+}
+
+async function setActiveBulkTab(tabId) {
+  try {
+    if (tabId == null) {
+      await chrome.storage.session.remove(BULK_ACTIVE_TAB_KEY);
+    } else {
+      await chrome.storage.session.set({ [BULK_ACTIVE_TAB_KEY]: tabId });
+    }
+  } catch {
+    // ignore
+  }
+}
+
+async function closeTrackedBulkTab() {
+  try {
+    const data = await chrome.storage.session.get(BULK_ACTIVE_TAB_KEY);
+    const tabId = data[BULK_ACTIVE_TAB_KEY];
+    if (tabId != null) {
+      try {
+        await chrome.tabs.remove(tabId);
+      } catch {
+        // ignore
+      }
+    }
+    await chrome.storage.session.remove(BULK_ACTIVE_TAB_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+async function readExportPayload(result) {
+  if (result?.storageKey) {
+    const key = String(result.storageKey);
+    if (!key.startsWith(EXPORT_PAYLOAD_PREFIX)) {
+      throw new Error("Invalid export payload key.");
+    }
+    const data = await chrome.storage.session.get(key);
+    const payload = data[key];
+    try {
+      await chrome.storage.session.remove(key);
+    } catch {
+      // ignore
+    }
+    if (!payload?.content) {
+      throw new Error("Empty export result");
+    }
+    return {
+      content: payload.content,
+      filename: payload.filename || result.filename,
+    };
+  }
+  if (!result?.content) throw new Error("Empty export result");
+  return { content: result.content, filename: result.filename };
 }
 
 async function clearCancelFlag() {
@@ -396,8 +504,8 @@ async function runBulkJob(job) {
       zipName,
     });
 
-    // First ZIP may prompt Save As; later parts download quietly
-    await downloadZip(zipFiles, zipName, partIndex === 1);
+    // Prompt Save As for every part so later ZIPs are not silently dropped
+    await downloadZip(zipFiles, zipName, true);
     zipNames.push(zipName);
     batch = [];
     batchBytes = 0;
@@ -470,15 +578,17 @@ async function runBulkJob(job) {
           active: false,
         });
         tabId = tab.id;
+        await setActiveBulkTab(tabId);
         await waitForTabComplete(tabId);
         await sleep(800);
 
-        const exported = await sendExport(tabId, {
+        const exportedRaw = await sendExport(tabId, {
           type: "pplx-export",
           action: format === "json" ? "json" : "md",
           quiet: true,
           collect: true,
         });
+        const exported = await readExportPayload(exportedRaw);
 
         if (!exported?.content) {
           throw new Error("Empty export result");
@@ -500,8 +610,7 @@ async function runBulkJob(job) {
           try {
             await flushBatch({ force: true, moreComing: true });
           } catch (zipErr) {
-            batch = [];
-            batchBytes = 0;
+            // Keep batch in memory for failJob reporting — do not discard
             const fatal = new Error(
               zipErr?.message || "Failed to write ZIP batch."
             );
@@ -523,8 +632,6 @@ async function runBulkJob(job) {
             moreComing: i < threads.length - 1,
           });
         } catch (zipErr) {
-          batch = [];
-          batchBytes = 0;
           const fatal = new Error(
             zipErr?.message || "Failed to write ZIP batch."
           );
@@ -547,6 +654,7 @@ async function runBulkJob(job) {
           } catch {
             // ignore
           }
+          await setActiveBulkTab(null);
         }
       }
 
@@ -605,6 +713,11 @@ async function runBulkJob(job) {
     });
     return finished;
   } catch (err) {
+    await closeTrackedBulkTab();
+    const partial =
+      zipNames.length > 0
+        ? ` ${zipNames.length} ZIP part(s) were already saved (${zipNames.join(", ")}).`
+        : "";
     return failJob(
       {
         ...state,
@@ -615,11 +728,12 @@ async function runBulkJob(job) {
         collected: done,
         zipNames,
       },
-      err,
+      new Error(`${err?.message || String(err)}${partial}`),
       openerTabId
     );
   } finally {
     bulkRunning = false;
+    await setActiveBulkTab(null);
   }
 }
 
@@ -629,6 +743,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const tabId = sender.tab?.id;
         if (tabId == null) throw new Error("Missing tab for harvester inject.");
+        if (!isTrustedExtensionSender(sender)) {
+          throw new Error("Harvester inject only from Perplexity tabs.");
+        }
+        const token = String(message.token || "").slice(0, 80);
+        if (token) {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            func: (t) => {
+              window.__pplxExportHarvestToken = t;
+            },
+            args: [token],
+          });
+        }
         await chrome.scripting.executeScript({
           target: { tabId },
           world: "MAIN",
@@ -645,6 +773,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "pplx-download") {
     (async () => {
       try {
+        if (sender.tab && !isTrustedExtensionSender(sender)) {
+          throw new Error("Unauthorized download request.");
+        }
         await downloadData(message);
         sendResponse({ ok: true });
       } catch (err) {

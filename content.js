@@ -11,8 +11,11 @@
   let defaultFormat = "md";
   let bulkBusy = false;
   let bulkListBusy = false;
+  let bulkPanelPinned = false;
   let bulkPollTimer = null;
   const BULK_JOB_KEY = "pplxBulkJob";
+  const BULK_LIST_CACHE_KEY = "pplxBulkListCache";
+  const MAX_INLINE_EXPORT_CHARS = 1_500_000;
 
   function normalizeFormat(value) {
     return value === "json" ? "json" : "md";
@@ -161,22 +164,28 @@
   }
 
   async function downloadText(filename, content, mime, saveAs = true) {
-    const url = toDataUrl(content, mime);
     const name = filename || "perplexport.md";
 
     try {
       const result = await chrome.runtime.sendMessage({
         type: "pplx-download",
         filename: name,
-        url,
+        content,
+        mime: mime || "text/markdown;charset=utf-8",
         saveAs,
       });
       if (result?.ok) return;
       throw new Error(result?.error || "Download failed.");
-    } catch {
-      if (!saveAs) {
-        // Still try anchor fallback for bulk
-      }
+    } catch (err) {
+      const msg = err?.message || String(err);
+      const transient =
+        /Extension context invalidated|Receiving end does not exist|Could not establish connection|message port closed/i.test(
+          msg
+        );
+      // Never silently "succeed" after cancel/interrupt — only fall back if SW is gone
+      if (!transient) throw err;
+
+      const url = toDataUrl(content, mime);
       const a = document.createElement("a");
       a.href = url;
       a.download = name.split("/").pop() || name;
@@ -185,6 +194,22 @@
       a.click();
       a.remove();
     }
+  }
+
+  async function packageCollectResult(filename, content, mime) {
+    if (
+      typeof content === "string" &&
+      content.length > MAX_INLINE_EXPORT_CHARS
+    ) {
+      const storageKey = `pplxExportPayload_${Date.now()}_${Math.random()
+        .toString(16)
+        .slice(2)}`;
+      await chrome.storage.session.set({
+        [storageKey]: { content, filename, mime },
+      });
+      return { ok: true, filename, storageKey, mime, bytes: content.length };
+    }
+    return { ok: true, filename, content, mime };
   }
 
   async function copyText(text) {
@@ -264,7 +289,7 @@
         const filename =
           prefix + PplxExport.suggestedFilename(conversation, "json");
         if (collect) {
-          return { ok: true, filename, content: json, mime: "application/json" };
+          return packageCollectResult(filename, json, "application/json");
         }
         await downloadText(
           filename,
@@ -281,7 +306,7 @@
       const filename =
         prefix + PplxExport.suggestedFilename(conversation, "md");
       if (collect) {
-        return { ok: true, filename, content: md, mime: "text/markdown" };
+        return packageCollectResult(filename, md, "text/markdown");
       }
       await downloadText(
         filename,
@@ -410,7 +435,7 @@
 
   function ensureBulkUi() {
     const kind = getPageKind();
-    const keepAlive = bulkListBusy || bulkBusy;
+    const keepAlive = bulkListBusy || bulkBusy || bulkPanelPinned;
     let panel = document.getElementById(BULK_ID);
 
     if (panel && (kind === "bulk" || keepAlive)) {
@@ -504,7 +529,7 @@
       await refreshBulkList();
     });
     close.addEventListener("click", () => {
-      if (bulkListBusy || bulkBusy) return;
+      if (bulkListBusy || bulkBusy || bulkPanelPinned) return;
       sheet.setAttribute("hidden", "");
     });
     refresh.addEventListener("click", () => refreshBulkList());
@@ -567,6 +592,87 @@
     return t;
   }
 
+  function labelForBulkThread(t) {
+    const raw = cleanBulkTitle(t?.title);
+    if (raw) return truncateLabel(raw).replace(/</g, "&lt;");
+    const id = String(t?.url || "")
+      .replace(/^\/search\//, "")
+      .slice(0, 8);
+    return id ? `Untitled (${id}…)` : "Untitled thread";
+  }
+
+  function renderBulkListResult(panel, result) {
+    if (!panel || !result) return;
+    panel._bulkData = result;
+    const liveStatus = panel.querySelector(".pplx-bulk-status");
+    const liveList = panel.querySelector(".pplx-bulk-list");
+    const liveStart = panel.querySelector(".pplx-bulk-start");
+    const liveResolve = panel.querySelector(".pplx-bulk-resolve");
+    const liveRefresh = panel.querySelector(".pplx-bulk-refresh");
+    const metaEl = panel.querySelector(".pplx-bulk-meta");
+    if (metaEl && result.project?.name) metaEl.textContent = result.project.name;
+    syncBulkFormatUi();
+
+    const missing = result.missing || [];
+    const threads = result.threads || [];
+
+    if (!threads.length && !missing.length) {
+      if (liveStatus) liveStatus.textContent = "No threads found in the Sessions table.";
+      if (liveList) liveList.innerHTML = "";
+      if (liveStart) liveStart.disabled = true;
+      if (liveResolve) liveResolve.disabled = false;
+      return;
+    }
+
+    if (liveStatus) {
+      liveStatus.textContent =
+        `${threads.length} threads with links` +
+        (missing.length
+          ? ` · ${missing.length} without links (use Find missing — Library hides most URLs in the DOM)`
+          : "");
+    }
+
+    const readyItems = threads.map((t, i) => {
+      const date = (t.date || "").slice(0, 10);
+      const title = labelForBulkThread(t);
+      const dateHtml = date
+        ? `<em>${date}</em>`
+        : `<em class="is-empty">No date</em>`;
+      return `<label class="pplx-bulk-item"><input type="checkbox" data-index="${i}" checked /><span class="pplx-bulk-item-text"><strong>${title}</strong>${dateHtml}</span></label>`;
+    });
+
+    const missingItems = missing.map((t) => {
+      const date = (t.date || "").slice(0, 10);
+      const title = labelForBulkThread(t);
+      const dateHtml = date
+        ? `<em>${date}</em>`
+        : `<em class="is-empty">No date</em>`;
+      return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><strong>${title}</strong>${dateHtml} <small>(no link)</small></span></label>`;
+    });
+
+    if (liveList) liveList.innerHTML = [...readyItems, ...missingItems].join("");
+    if (liveStart) liveStart.disabled = !threads.length;
+    if (liveResolve) liveResolve.disabled = !missing.length;
+    if (liveRefresh) liveRefresh.disabled = false;
+  }
+
+  async function restoreBulkListFromCache(panel) {
+    if (!panel || panel._bulkData) return false;
+    try {
+      const data = await chrome.storage.session.get(BULK_LIST_CACHE_KEY);
+      const cached = data[BULK_LIST_CACHE_KEY];
+      if (!cached?.threads || Date.now() - (cached.savedAt || 0) > 30 * 60 * 1000) {
+        return false;
+      }
+      renderBulkListResult(panel, cached);
+      bulkPanelPinned = false;
+      panel.classList.remove("is-busy");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function refreshBulkList(options = {}) {
     const panel = ensureBulkUi();
     if (!panel) return;
@@ -578,6 +684,7 @@
     const refreshBtn = panel.querySelector(".pplx-bulk-refresh");
 
     bulkListBusy = true;
+    bulkPanelPinned = true;
     panel.classList.add("is-busy");
     sheet?.removeAttribute("hidden");
     syncVisibility();
@@ -637,62 +744,21 @@
       // Re-bind after possible SPA navigations during Find missing
       const live = document.getElementById(BULK_ID) || ensureBulkUi();
       if (!live) return;
-      const liveStatus = live.querySelector(".pplx-bulk-status") || status;
-      const liveList = live.querySelector(".pplx-bulk-list") || list;
-      const liveStart = live.querySelector(".pplx-bulk-start") || start;
-      const liveResolve = live.querySelector(".pplx-bulk-resolve") || resolveBtn;
 
-      live._bulkData = result;
-      syncBulkFormatUi();
-      const metaEl = live.querySelector(".pplx-bulk-meta");
-      if (metaEl) metaEl.textContent = result.project.name;
-      setBulkProgress({ visible: false });
-
-      if (!result.threads.length && !result.missing?.length) {
-        liveStatus.textContent = "No threads found in the Sessions table.";
-        if (liveResolve) liveResolve.disabled = false;
-        return;
+      try {
+        await chrome.storage.session.set({
+          [BULK_LIST_CACHE_KEY]: {
+            project: result.project,
+            threads: result.threads,
+            missing: result.missing,
+            savedAt: Date.now(),
+          },
+        });
+      } catch {
+        // ignore
       }
-
-      const missing = result.missing || [];
-      liveStatus.textContent =
-        `${result.threads.length} threads with links` +
-        (missing.length
-          ? ` · ${missing.length} without links (use Find missing — Library hides most URLs in the DOM)`
-          : "");
-
-      const labelFor = (t) => {
-        const raw = cleanBulkTitle(t?.title);
-        if (raw) return truncateLabel(raw).replace(/</g, "&lt;");
-        const id = String(t?.url || "")
-          .replace(/^\/search\//, "")
-          .slice(0, 8);
-        return id ? `Untitled (${id}…)` : "Untitled thread";
-      };
-
-      const readyItems = result.threads.map((t, i) => {
-        const date = (t.date || "").slice(0, 10);
-        const title = labelFor(t);
-        const dateHtml = date
-          ? `<em>${date}</em>`
-          : `<em class="is-empty">No date</em>`;
-        return `<label class="pplx-bulk-item"><input type="checkbox" data-index="${i}" checked /><span class="pplx-bulk-item-text"><strong>${title}</strong>${dateHtml}</span></label>`;
-      });
-
-      const missingItems = missing.map((t) => {
-        const date = (t.date || "").slice(0, 10);
-        const title = labelFor(t);
-        const dateHtml = date
-          ? `<em>${date}</em>`
-          : `<em class="is-empty">No date</em>`;
-        return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><strong>${title}</strong>${dateHtml} <small>(no link)</small></span></label>`;
-      });
-
-      liveList.innerHTML = [...readyItems, ...missingItems].join("");
-      liveStart.disabled = !result.threads.length;
-      if (liveResolve) liveResolve.disabled = !missing.length;
-      const liveRefresh = live?.querySelector(".pplx-bulk-refresh");
-      if (liveRefresh) liveRefresh.disabled = false;
+      setBulkProgress({ visible: false });
+      renderBulkListResult(live, result);
     } catch (err) {
       const live = document.getElementById(BULK_ID);
       const liveStatus = live?.querySelector(".pplx-bulk-status");
@@ -704,7 +770,18 @@
     } finally {
       bulkListBusy = false;
       const live = document.getElementById(BULK_ID);
-      live?.classList.remove("is-busy");
+      if (getPageKind() === "bulk") {
+        bulkPanelPinned = false;
+        live?.classList.remove("is-busy");
+      } else {
+        bulkPanelPinned = true;
+        live?.classList.add("is-busy");
+        const liveStatus = live?.querySelector(".pplx-bulk-status");
+        if (liveStatus && live?._bulkData) {
+          liveStatus.textContent =
+            "Open Library or your project to keep using this list.";
+        }
+      }
       syncVisibility();
     }
   }
@@ -895,7 +972,10 @@
 
   function syncVisibility() {
     const kind = getPageKind();
-    const keepBulkAlive = bulkListBusy || bulkBusy;
+    if (kind === "bulk" && bulkPanelPinned && !bulkListBusy && !bulkBusy) {
+      bulkPanelPinned = false;
+    }
+    const keepBulkAlive = bulkListBusy || bulkBusy || bulkPanelPinned;
     const showFab = kind === "thread" && !keepBulkAlive;
     const showBulk = kind === "bulk" || keepBulkAlive;
 
@@ -924,8 +1004,11 @@
         if (keepBulkAlive) {
           bulk.classList.add("is-busy");
           bulk.querySelector(".pplx-bulk-panel")?.removeAttribute("hidden");
-        } else {
+        } else if (!bulkListBusy && !bulkBusy) {
           bulk.classList.remove("is-busy");
+        }
+        if (kind === "bulk" && !bulk._bulkData && !bulkListBusy) {
+          restoreBulkListFromCache(bulk).catch(() => {});
         }
       }
     } else {
