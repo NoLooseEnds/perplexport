@@ -342,11 +342,21 @@
   margin-left: 4px;
 }
 
+#pplx-export-bulk .pplx-bulk-item-text strong {
+  display: block;
+  font-weight: 550;
+  color: #14241f;
+}
+
 #pplx-export-bulk .pplx-bulk-item-text em {
   display: block;
   font-style: normal;
   color: #5b6b67;
   font-size: 11px;
+}
+
+#pplx-export-bulk .pplx-bulk-item-text em.is-empty {
+  color: #9aa8a4;
 }
 
 #pplx-export-bulk .pplx-bulk-actions {

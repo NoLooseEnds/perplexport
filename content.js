@@ -552,6 +552,14 @@
     return t.length > max ? `${t.slice(0, max)}…` : t;
   }
 
+  function cleanBulkTitle(title) {
+    const t = (title || "").replace(/\s+/g, " ").trim();
+    if (!t) return "";
+    if (t.startsWith("/search/")) return "";
+    if (/^https?:\/\/(?:www\.)?perplexity\.ai\/search\//i.test(t)) return "";
+    return t;
+  }
+
   async function refreshBulkList(options = {}) {
     const panel = ensureBulkUi();
     if (!panel) return;
@@ -634,19 +642,31 @@
           ? ` · ${missing.length} without links (use Find missing — Library hides most URLs in the DOM)`
           : "");
 
+      const labelFor = (t) => {
+        const raw = cleanBulkTitle(t?.title);
+        if (raw) return truncateLabel(raw).replace(/</g, "&lt;");
+        const id = String(t?.url || "")
+          .replace(/^\/search\//, "")
+          .slice(0, 8);
+        return id ? `Untitled (${id}…)` : "Untitled thread";
+      };
+
       const readyItems = result.threads.map((t, i) => {
         const date = (t.date || "").slice(0, 10);
-        const title = truncateLabel(t.title || t.url || "Thread").replace(
-          /</g,
-          "&lt;"
-        );
-        return `<label class="pplx-bulk-item"><input type="checkbox" data-index="${i}" checked /><span class="pplx-bulk-item-text"><em>${date || "—"}</em> ${title}</span></label>`;
+        const title = labelFor(t);
+        const dateHtml = date
+          ? `<em>${date}</em>`
+          : `<em class="is-empty">No date</em>`;
+        return `<label class="pplx-bulk-item"><input type="checkbox" data-index="${i}" checked /><span class="pplx-bulk-item-text"><strong>${title}</strong>${dateHtml}</span></label>`;
       });
 
       const missingItems = missing.map((t) => {
         const date = (t.date || "").slice(0, 10);
-        const title = truncateLabel(t.title || "Thread").replace(/</g, "&lt;");
-        return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><em>${date || "—"}</em> ${title} <small>(no link)</small></span></label>`;
+        const title = labelFor(t);
+        const dateHtml = date
+          ? `<em>${date}</em>`
+          : `<em class="is-empty">No date</em>`;
+        return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><strong>${title}</strong>${dateHtml} <small>(no link)</small></span></label>`;
       });
 
       liveList.innerHTML = [...readyItems, ...missingItems].join("");
