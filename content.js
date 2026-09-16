@@ -705,18 +705,24 @@
     try {
       const result = await PplxExport.listProjectThreads({
         resolveMissing: Boolean(options.resolveMissing),
-        onProgress: ({ rows, withUrl, phase, idle, idleNeeded }) => {
+        onProgress: ({ rows, withUrl, harvested, phase, idle, idleNeeded }) => {
           const counts =
             typeof withUrl === "number"
               ? `${withUrl} with links · ${rows} total`
               : `${rows} unique`;
+          const harvestNote =
+            typeof harvested === "number" && harvested > 0
+              ? ` · ${harvested} harvested`
+              : "";
           if (phase === "waiting") {
             const left = Math.max((idleNeeded || 0) - (idle || 0), 0);
-            status.textContent = `Waiting for more… (${counts}${
+            status.textContent = `Waiting for more… (${counts}${harvestNote}${
               left ? ` · finish in ~${left}` : ""
             })`;
+          } else if (phase === "unsticking") {
+            status.textContent = `Scroll stuck — nudging… (${counts}${harvestNote})`;
           } else {
-            status.textContent = `Loading sessions… (${counts})`;
+            status.textContent = `Loading sessions… (${counts}${harvestNote})`;
           }
           setBulkProgress({
             visible: true,
@@ -725,7 +731,7 @@
             total: Math.max(rows, 1),
           });
         },
-        onResolveProgress: ({ index, total, title }) => {
+        onResolveProgress: ({ index, total, title, partial }) => {
           // Stay pinned while SPA hops briefly leave /library
           syncVisibility();
           const live = document.getElementById(BULK_ID);
@@ -738,6 +744,20 @@
             current: index + 1,
             total,
           });
+          if (partial && live) {
+            const withUrl = partial.filter((t) => t.url);
+            const missing = partial.filter((t) => !t.url);
+            const project =
+              live._bulkData?.project ||
+              { name: "Library", kind: "library" };
+            const snapshot = { project, threads: withUrl, missing };
+            live._bulkData = snapshot;
+            chrome.storage.session
+              .set({
+                [BULK_LIST_CACHE_KEY]: { ...snapshot, savedAt: Date.now() },
+              })
+              .catch(() => {});
+          }
         },
       });
 
