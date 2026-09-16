@@ -518,7 +518,7 @@
           <button type="button" class="pplx-bulk-start">Start export</button>
           <button type="button" class="pplx-bulk-cancel" hidden>Cancel</button>
         </div>
-        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). From Library, files are grouped into project folders (plus <code>uncategorized</code>). “Find missing” briefly opens rows without links; the panel stays open while that runs.</p>
+        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). From Library, files are grouped into project folders (plus <code>uncategorized</code>). “Find missing” uses the list already loaded (no re-scroll) and briefly opens rows without links.</p>
       </div>
     `;
     document.documentElement.appendChild(panel);
@@ -549,7 +549,17 @@
       sheet.setAttribute("hidden", "");
     });
     refresh.addEventListener("click", () => refreshBulkList());
-    resolve.addEventListener("click", () => refreshBulkList({ resolveMissing: true }));
+    resolve.addEventListener("click", () => {
+      const data = panel._bulkData;
+      const existing = data
+        ? [...(data.threads || []), ...(data.missing || [])]
+        : [];
+      refreshBulkList({
+        resolveMissing: true,
+        skipLoad: existing.length > 0,
+        existingThreads: existing.length ? existing : undefined,
+      });
+    });
     start.addEventListener("click", () => startBulkExport());
     cancel.addEventListener("click", () => cancelBulkExport());
 
@@ -725,7 +735,9 @@
     sheet?.removeAttribute("hidden");
     syncVisibility();
     status.textContent = options.resolveMissing
-      ? "Fetching missing links (brief navigation)…"
+      ? options.skipLoad
+        ? "Fetching missing links (using current list)…"
+        : "Fetching missing links (brief navigation)…"
       : "Scrolling the Sessions list…";
     list.innerHTML = "";
     start.disabled = true;
@@ -741,7 +753,17 @@
     try {
       const result = await PplxExport.listProjectThreads({
         resolveMissing: Boolean(options.resolveMissing),
+        skipLoad: Boolean(options.skipLoad),
+        existingThreads: options.existingThreads || null,
         onProgress: ({ rows, withUrl, harvested, phase, idle, idleNeeded }) => {
+          if (phase === "cached") {
+            status.textContent = `Using loaded list… (${
+              typeof withUrl === "number"
+                ? `${withUrl} with links · ${rows} total`
+                : `${rows} unique`
+            })`;
+            return;
+          }
           const counts =
             typeof withUrl === "number"
               ? `${withUrl} with links · ${rows} total`
