@@ -49,6 +49,50 @@ function sanitizeFolder(name) {
   return folder || "perplexport";
 }
 
+/** Folder for Library ZIP grouping when a thread has no Space/project pill. */
+const UNCATEGORIZED_FOLDER = "uncategorized";
+
+function uniqueZipName(name, used) {
+  let base = sanitizeFilename(name, "export.txt");
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  let i = 2;
+  while (used.has(`${stem}-${i}${ext}`)) i += 1;
+  const next = `${stem}-${i}${ext}`;
+  used.add(next);
+  return next;
+}
+
+/** Like uniqueZipName but preserves folder prefixes (project / uncategorized). */
+function uniqueZipPath(relativePath, used) {
+  const parts = String(relativePath || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+  const file = sanitizeFilename(parts.pop() || "export.txt");
+  const dirs = parts.map((p) => sanitizeFolder(p));
+  const join = (name) => [...dirs, name].join("/");
+
+  let candidate = join(file);
+  if (!used.has(candidate)) {
+    used.add(candidate);
+    return candidate;
+  }
+  const dot = file.lastIndexOf(".");
+  const stem = dot > 0 ? file.slice(0, dot) : file;
+  const ext = dot > 0 ? file.slice(dot) : "";
+  let i = 2;
+  while (used.has(join(`${stem}-${i}${ext}`))) i += 1;
+  candidate = join(`${stem}-${i}${ext}`);
+  used.add(candidate);
+  return candidate;
+}
+
 /**
  * Only allow Perplexity /search/ thread URLs.
  */
@@ -205,22 +249,6 @@ function waitForDownloadOutcome(downloadId, timeoutMs = 15 * 60 * 1000) {
       })
       .catch(() => {});
   });
-}
-
-function uniqueZipName(name, used) {
-  let base = sanitizeFilename(name, "export.txt");
-  if (!used.has(base)) {
-    used.add(base);
-    return base;
-  }
-  const dot = base.lastIndexOf(".");
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : "";
-  let i = 2;
-  while (used.has(`${stem}-${i}${ext}`)) i += 1;
-  const next = `${stem}-${i}${ext}`;
-  used.add(next);
-  return next;
 }
 
 async function hasOffscreenDocument() {
@@ -476,7 +504,15 @@ async function failJob(job, err, openerTabId) {
 }
 
 async function runBulkJob(job) {
-  const { threads, format, folder, openerTabId, projectName, projectUrl } = job;
+  const {
+    threads,
+    format,
+    folder,
+    openerTabId,
+    projectName,
+    projectUrl,
+    groupByProject,
+  } = job;
   const total = threads.length;
   let done = 0;
   let failed = 0;
@@ -648,11 +684,15 @@ async function runBulkJob(job) {
           }
         }
 
-        const name = uniqueZipName(
+        const fileName =
           exported.filename ||
-            `thread-${i + 1}.${format === "json" ? "json" : "md"}`,
-          usedNames
-        );
+          `thread-${i + 1}.${format === "json" ? "json" : "md"}`;
+        const relative = groupByProject
+          ? `${sanitizeFolder(
+              thread.projectTag || UNCATEGORIZED_FOLDER
+            )}/${fileName}`
+          : fileName;
+        const name = uniqueZipPath(relative, usedNames);
         batch.push({ name, content: exported.content });
         batchBytes += contentBytes;
 
@@ -889,6 +929,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           projectUrl: message.projectUrl
             ? String(message.projectUrl).slice(0, 500)
             : null,
+          groupByProject: Boolean(message.groupByProject),
           startedAt: new Date().toISOString(),
         };
 

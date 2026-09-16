@@ -32,7 +32,7 @@ _**Note:** This is a low effort project, but it did what it needed to do for me.
 
 ![Bulk export panel](docs/bulk-export.png)
 
-**Auto-batching:** large jobs are split automatically — roughly every **30 threads** or **~12 MB** of content — into `library-part-01.zip` / `project-part-01.zip`, and so on. Small jobs stay a single ZIP. Filenames inside each ZIP: `YYYY-MM-DD-title.md` / `.json`.
+**Auto-batching:** large jobs are split automatically — roughly every **30 threads** or **~10 MB** of content — into `library-part-01.zip` / `project-part-01.zip`, and so on. Small jobs stay a single ZIP. Filenames inside each ZIP: `YYYY-MM-DD-title.md` / `.json`. From **Library**, threads are nested under project folders (e.g. `library/Hodeprat/…`), with threads that have no Space pill in `library/uncategorized/`.
 
 Use **Find missing** only when some Sessions rows have no `/search/` link; it briefly navigates into those rows and can leave the list page if back-navigation fails.
 

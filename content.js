@@ -518,7 +518,7 @@
           <button type="button" class="pplx-bulk-start">Start export</button>
           <button type="button" class="pplx-bulk-cancel" hidden>Cancel</button>
         </div>
-        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). “Find missing” briefly opens rows without links; the panel stays open while that runs.</p>
+        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). From Library, files are grouped into project folders (plus <code>uncategorized</code>). “Find missing” briefly opens rows without links; the panel stays open while that runs.</p>
       </div>
     `;
     document.documentElement.appendChild(panel);
@@ -882,6 +882,7 @@
         folder,
         projectName: data.project?.name || null,
         projectUrl: data.project?.url || null,
+        groupByProject: data.project?.kind === "library",
       });
       if (!result?.ok) throw new Error(result?.error || "Bulk start failed");
       status.textContent = `Exporting 0/${selected.length}…`;
