@@ -128,6 +128,15 @@
   display: none !important;
 }
 
+#pplx-export-bulk.is-busy {
+  z-index: 2147483647;
+}
+
+#pplx-export-bulk.is-busy .pplx-bulk-close {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 #pplx-export-bulk .pplx-bulk-launch {
   display: inline-flex;
   align-items: center;

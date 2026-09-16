@@ -409,10 +409,11 @@
   }
 
   function ensureBulkUi() {
-    if (getPageKind() !== "bulk") return null;
-
+    const kind = getPageKind();
+    const keepAlive = bulkListBusy || bulkBusy;
     let panel = document.getElementById(BULK_ID);
-    if (panel) {
+
+    if (panel && (kind === "bulk" || keepAlive)) {
       const launch = panel.querySelector(".pplx-bulk-launch");
       if (launch && !launch.querySelector("svg")) {
         launch.innerHTML = `
@@ -437,6 +438,9 @@
       ensureBulkProgressEl(panel);
       return panel;
     }
+
+    if (kind !== "bulk") return null;
+    if (panel) return panel;
 
     panel = document.createElement("div");
     panel.id = BULK_ID;
@@ -473,7 +477,7 @@
           <button type="button" class="pplx-bulk-start">Start export</button>
           <button type="button" class="pplx-bulk-cancel" hidden>Cancel</button>
         </div>
-        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). “Find missing” briefly navigates into rows without links (may leave the list page if navigation fails).</p>
+        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). “Find missing” briefly opens rows without links; the panel stays open while that runs.</p>
       </div>
     `;
     document.documentElement.appendChild(panel);
@@ -499,7 +503,10 @@
       syncBulkFormatUi();
       await refreshBulkList();
     });
-    close.addEventListener("click", () => sheet.setAttribute("hidden", ""));
+    close.addEventListener("click", () => {
+      if (bulkListBusy || bulkBusy) return;
+      sheet.setAttribute("hidden", "");
+    });
     refresh.addEventListener("click", () => refreshBulkList());
     resolve.addEventListener("click", () => refreshBulkList({ resolveMissing: true }));
     start.addEventListener("click", () => startBulkExport());
@@ -565,16 +572,22 @@
     if (!panel) return;
     const status = panel.querySelector(".pplx-bulk-status");
     const list = panel.querySelector(".pplx-bulk-list");
+    const sheet = panel.querySelector(".pplx-bulk-panel");
     const start = panel.querySelector(".pplx-bulk-start");
     const resolveBtn = panel.querySelector(".pplx-bulk-resolve");
+    const refreshBtn = panel.querySelector(".pplx-bulk-refresh");
 
     bulkListBusy = true;
+    panel.classList.add("is-busy");
+    sheet?.removeAttribute("hidden");
+    syncVisibility();
     status.textContent = options.resolveMissing
       ? "Fetching missing links (brief navigation)…"
       : "Scrolling the Sessions list…";
     list.innerHTML = "";
     start.disabled = true;
     if (resolveBtn) resolveBtn.disabled = true;
+    if (refreshBtn) refreshBtn.disabled = true;
     setBulkProgress({
       visible: true,
       indeterminate: true,
@@ -606,7 +619,13 @@
           });
         },
         onResolveProgress: ({ index, total, title }) => {
-          status.textContent = `Fetching link ${index + 1}/${total}: ${truncateLabel(title, 40)}`;
+          // Stay pinned while SPA hops briefly leave /library
+          syncVisibility();
+          const live = document.getElementById(BULK_ID);
+          const liveStatus = live?.querySelector(".pplx-bulk-status");
+          if (liveStatus) {
+            liveStatus.textContent = `Fetching link ${index + 1}/${total}: ${truncateLabel(title, 40)}`;
+          }
           setBulkProgress({
             visible: true,
             current: index + 1,
@@ -672,14 +691,20 @@
       liveList.innerHTML = [...readyItems, ...missingItems].join("");
       liveStart.disabled = !result.threads.length;
       if (liveResolve) liveResolve.disabled = !missing.length;
+      const liveRefresh = live?.querySelector(".pplx-bulk-refresh");
+      if (liveRefresh) liveRefresh.disabled = false;
     } catch (err) {
       const live = document.getElementById(BULK_ID);
       const liveStatus = live?.querySelector(".pplx-bulk-status");
       if (liveStatus) liveStatus.textContent = err.message || "Could not load threads";
       const liveResolve = live?.querySelector(".pplx-bulk-resolve");
       if (liveResolve) liveResolve.disabled = false;
+      const liveRefresh = live?.querySelector(".pplx-bulk-refresh");
+      if (liveRefresh) liveRefresh.disabled = false;
     } finally {
       bulkListBusy = false;
+      const live = document.getElementById(BULK_ID);
+      live?.classList.remove("is-busy");
       syncVisibility();
     }
   }
@@ -870,8 +895,9 @@
 
   function syncVisibility() {
     const kind = getPageKind();
-    const showFab = kind === "thread";
-    const showBulk = kind === "bulk";
+    const keepBulkAlive = bulkListBusy || bulkBusy;
+    const showFab = kind === "thread" && !keepBulkAlive;
+    const showBulk = kind === "bulk" || keepBulkAlive;
 
     if (showFab) {
       ensureUi();
@@ -889,17 +915,18 @@
     }
 
     if (showBulk) {
-      const bulk = ensureBulkUi();
+      const bulk =
+        document.getElementById(BULK_ID) ||
+        (kind === "bulk" ? ensureBulkUi() : null);
       if (bulk) {
         bulk.classList.remove("is-hidden");
         bulk.removeAttribute("hidden");
-      }
-    } else if (bulkListBusy || bulkBusy) {
-      // Keep the panel mounted across SPA hops (Find missing / export)
-      const bulk = document.getElementById(BULK_ID);
-      if (bulk) {
-        bulk.classList.add("is-hidden");
-        bulk.setAttribute("hidden", "");
+        if (keepBulkAlive) {
+          bulk.classList.add("is-busy");
+          bulk.querySelector(".pplx-bulk-panel")?.removeAttribute("hidden");
+        } else {
+          bulk.classList.remove("is-busy");
+        }
       }
     } else {
       removeBulkUi();
