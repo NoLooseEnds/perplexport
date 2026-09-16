@@ -6,8 +6,7 @@ const BULK_ACTIVE_TAB_KEY = "pplxBulkActiveTab";
 const EXPORT_PAYLOAD_PREFIX = "pplxExportPayload_";
 const OFFSCREEN_URL = "offscreen.html";
 const MAX_ZIP_BYTES = self.PplxExport.MAX_ZIP_DOWNLOAD_BYTES || 14 * 1024 * 1024;
-/** Soft limits — flush a ZIP early so large jobs stay under the hard cap. */
-const BATCH_MAX_FILES = 30;
+/** Flush a ZIP when uncompressed content nears the hard download/messaging cap. */
 const BATCH_SOFT_BYTES = 10 * 1024 * 1024;
 /** Avoid giant structured-clone payloads over tabs.sendMessage / session storage. */
 const MAX_INLINE_EXPORT_CHARS = 1_500_000;
@@ -550,11 +549,7 @@ async function runBulkJob(job) {
 
   const flushBatch = async ({ force = false, moreComing = false } = {}) => {
     if (!batch.length) return;
-    if (
-      !force &&
-      batch.length < BATCH_MAX_FILES &&
-      batchBytes < BATCH_SOFT_BYTES
-    ) {
+    if (!force && batchBytes < BATCH_SOFT_BYTES) {
       return;
     }
 
@@ -688,12 +683,8 @@ async function runBulkJob(job) {
           );
         }
 
-        // Flush before adding if this file would push the soft limit / file cap
-        if (
-          batch.length &&
-          (batch.length >= BATCH_MAX_FILES ||
-            batchBytes + contentBytes >= BATCH_SOFT_BYTES)
-        ) {
+        // Flush before adding if this file would push past the size budget
+        if (batch.length && batchBytes + contentBytes >= BATCH_SOFT_BYTES) {
           try {
             await flushBatch({ force: true, moreComing: true });
           } catch (zipErr) {

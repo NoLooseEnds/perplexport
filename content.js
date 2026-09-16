@@ -518,7 +518,7 @@
           <button type="button" class="pplx-bulk-start">Start export</button>
           <button type="button" class="pplx-bulk-cancel" hidden>Cancel</button>
         </div>
-        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (about 30 threads or ~12&nbsp;MB each). From Library, files are grouped into project folders (plus <code>uncategorized</code>). “Find missing” uses the list already loaded (no re-scroll) and briefly opens rows without links.</p>
+        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (~10&nbsp;MB of content each). From Library, files are grouped into project folders (plus <code>uncategorized</code>). “Find missing” uses the list already loaded (no re-scroll) and briefly opens rows without links.</p>
       </div>
     `;
     document.documentElement.appendChild(panel);

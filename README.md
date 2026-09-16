@@ -32,7 +32,7 @@ _**Note:** This is a low effort project, but it did what it needed to do for me.
 
 ![Bulk export panel](docs/bulk-export.png)
 
-**Auto-batching:** large jobs are split automatically — roughly every **30 threads** or **~10 MB** of content — into `library-part-01.zip` / `project-part-01.zip`, and so on. Small jobs stay a single ZIP. Filenames inside each ZIP: `YYYY-MM-DD-title.md` / `.json`. From **Library**, threads are nested under project folders (e.g. `library/Hodeprat/…`), with threads that have no Space pill in `library/uncategorized/`.
+**Auto-batching:** large jobs are split automatically by size — roughly every **~10 MB** of content — into `library-part-01.zip` / `project-part-01.zip`, and so on. Small jobs stay a single ZIP. Filenames inside each ZIP: `YYYY-MM-DD-title.md` / `.json`. From **Library**, threads are nested under project folders (e.g. `library/Hodeprat/…`), with threads that have no Space pill in `library/uncategorized/`.
 
 **Model metadata:** when available, exports include the selected model (and Perplexity’s `display_model` when it differs) from the thread API / UI — best-effort and omitted when unknown.
 
