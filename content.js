@@ -635,19 +635,27 @@
     const readyItems = threads.map((t, i) => {
       const date = (t.date || "").slice(0, 10);
       const title = labelForBulkThread(t);
+      const tag = cleanBulkTitle(t.projectTag);
+      const tagHtml = tag
+        ? `<span class="pplx-bulk-tag">${truncateLabel(tag, 28).replace(/</g, "&lt;")}</span>`
+        : "";
       const dateHtml = date
         ? `<em>${date}</em>`
         : `<em class="is-empty">No date</em>`;
-      return `<label class="pplx-bulk-item"><input type="checkbox" data-index="${i}" checked /><span class="pplx-bulk-item-text"><strong>${title}</strong>${dateHtml}</span></label>`;
+      return `<label class="pplx-bulk-item"><input type="checkbox" data-index="${i}" checked /><span class="pplx-bulk-item-text"><strong>${title}</strong>${tagHtml}${dateHtml}</span></label>`;
     });
 
     const missingItems = missing.map((t) => {
       const date = (t.date || "").slice(0, 10);
       const title = labelForBulkThread(t);
+      const tag = cleanBulkTitle(t.projectTag);
+      const tagHtml = tag
+        ? `<span class="pplx-bulk-tag">${truncateLabel(tag, 28).replace(/</g, "&lt;")}</span>`
+        : "";
       const dateHtml = date
         ? `<em>${date}</em>`
         : `<em class="is-empty">No date</em>`;
-      return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><strong>${title}</strong>${dateHtml} <small>(no link)</small></span></label>`;
+      return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><strong>${title}</strong>${tagHtml}${dateHtml} <small>(no link)</small></span></label>`;
     });
 
     if (liveList) liveList.innerHTML = [...readyItems, ...missingItems].join("");

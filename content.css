@@ -357,6 +357,18 @@
   color: #14241f;
 }
 
+#pplx-export-bulk .pplx-bulk-tag {
+  display: inline-block;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #3d524c;
+  background: rgba(20, 90, 80, 0.08);
+}
+
 #pplx-export-bulk .pplx-bulk-item-text em {
   display: block;
   font-style: normal;
