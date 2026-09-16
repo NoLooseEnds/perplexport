@@ -577,11 +577,19 @@
     try {
       const result = await PplxExport.listProjectThreads({
         resolveMissing: Boolean(options.resolveMissing),
-        onProgress: ({ rows, withUrl }) => {
-          status.textContent =
+        onProgress: ({ rows, withUrl, phase, idle, idleNeeded }) => {
+          const counts =
             typeof withUrl === "number"
-              ? `Loading sessions… (${withUrl} with links · ${rows} total)`
-              : `Loading sessions… (${rows} unique)`;
+              ? `${withUrl} with links · ${rows} total`
+              : `${rows} unique`;
+          if (phase === "waiting") {
+            const left = Math.max((idleNeeded || 0) - (idle || 0), 0);
+            status.textContent = `Waiting for more… (${counts}${
+              left ? ` · finish in ~${left}` : ""
+            })`;
+          } else {
+            status.textContent = `Loading sessions… (${counts})`;
+          }
           setBulkProgress({
             visible: true,
             indeterminate: true,
