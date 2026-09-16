@@ -229,7 +229,7 @@
     ta.remove();
   }
 
-  async function buildConversation(quiet = false) {
+  async function buildConversation(quiet = false, meta = {}) {
     if (!window.PplxExport?.loadFullConversation) {
       throw new Error("Exporter is not loaded.");
     }
@@ -239,6 +239,9 @@
 
     if (!quiet) toast("Scrolling and loading the full thread…", false, true);
     const conversation = await PplxExport.loadFullConversation({
+      project: meta.project || null,
+      projectUrl: meta.projectUrl || null,
+      files: meta.files || [],
       onProgress: ({ turns, phase }) => {
         if (!quiet && phase === "loading") {
           toast(`Loading thread… (${turns} turns found)`, false, true);
@@ -275,7 +278,7 @@
 
     setBusy(true);
     try {
-      const conversation = await buildConversation(quiet);
+      const conversation = await buildConversation(quiet, options.meta || {});
 
       if (action === "copy") {
         const md = PplxExport.toMarkdown(conversation);
@@ -639,10 +642,16 @@
       const tagHtml = tag
         ? `<span class="pplx-bulk-tag">${truncateLabel(tag, 28).replace(/</g, "&lt;")}</span>`
         : "";
+      const files = Array.isArray(t.files) ? t.files : [];
+      const filesHtml = files.length
+        ? `<span class="pplx-bulk-files">${files.length} file${
+            files.length === 1 ? "" : "s"
+          }</span>`
+        : "";
       const dateHtml = date
         ? `<em>${date}</em>`
         : `<em class="is-empty">No date</em>`;
-      return `<label class="pplx-bulk-item"><input type="checkbox" data-index="${i}" checked /><span class="pplx-bulk-item-text"><strong>${title}</strong>${tagHtml}${dateHtml}</span></label>`;
+      return `<label class="pplx-bulk-item"><input type="checkbox" data-index="${i}" checked /><span class="pplx-bulk-item-text"><strong>${title}</strong>${tagHtml}${filesHtml}${dateHtml}</span></label>`;
     });
 
     const missingItems = missing.map((t) => {
@@ -652,10 +661,16 @@
       const tagHtml = tag
         ? `<span class="pplx-bulk-tag">${truncateLabel(tag, 28).replace(/</g, "&lt;")}</span>`
         : "";
+      const files = Array.isArray(t.files) ? t.files : [];
+      const filesHtml = files.length
+        ? `<span class="pplx-bulk-files">${files.length} file${
+            files.length === 1 ? "" : "s"
+          }</span>`
+        : "";
       const dateHtml = date
         ? `<em>${date}</em>`
         : `<em class="is-empty">No date</em>`;
-      return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><strong>${title}</strong>${tagHtml}${dateHtml} <small>(no link)</small></span></label>`;
+      return `<label class="pplx-bulk-item is-missing"><input type="checkbox" disabled /><span class="pplx-bulk-item-text"><strong>${title}</strong>${tagHtml}${filesHtml}${dateHtml} <small>(no link)</small></span></label>`;
     });
 
     if (liveList) liveList.innerHTML = [...readyItems, ...missingItems].join("");
@@ -1057,6 +1072,7 @@
         filenamePrefix: message.filenamePrefix,
         quiet: message.quiet,
         collect: message.collect,
+        meta: message.meta || {},
       });
       sendResponse(result);
     })();

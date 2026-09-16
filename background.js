@@ -587,6 +587,10 @@ async function runBulkJob(job) {
           action: format === "json" ? "json" : "md",
           quiet: true,
           collect: true,
+          meta: {
+            project: thread.projectTag || null,
+            files: thread.files || [],
+          },
         });
         const exported = await readExportPayload(exportedRaw);
 
@@ -838,6 +842,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             title: String(t?.title || "").slice(0, 300),
             url: normalizeThreadUrl(t?.url),
             date: t?.date || null,
+            projectTag: t?.projectTag ? String(t.projectTag).slice(0, 120) : null,
+            files: Array.isArray(t?.files)
+              ? t.files.map((f) => String(f).slice(0, 240)).slice(0, 40)
+              : [],
           }))
           .filter((t) => t.url);
 

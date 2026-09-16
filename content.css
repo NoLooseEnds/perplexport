@@ -369,6 +369,13 @@
   background: rgba(20, 90, 80, 0.08);
 }
 
+#pplx-export-bulk .pplx-bulk-files {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  color: #5b6b67;
+}
+
 #pplx-export-bulk .pplx-bulk-item-text em {
   display: block;
   font-style: normal;

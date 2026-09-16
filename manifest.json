@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Perplexport",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "description": "Export Perplexity chats to Markdown/JSON — single threads or bulk (ZIP) from Library or a project.",
   "icons": {
     "16": "icons/icon16.png",
