@@ -1,12 +1,7 @@
 # Perplexport
-
 Chrome extension that exports Perplexity chats to Markdown, JSON, or the clipboard — including bulk ZIP export from Library or a project.
 
-<p align="center">
-  <img src="docs/thread-export.png" alt="Thread export button with Markdown, JSON, and Copy Markdown options" width="320" />
-  &nbsp;&nbsp;
-  <img src="docs/bulk-export.png" alt="Bulk export panel on a project Sessions page" width="420" />
-</p>
+_**Note:** This is a low effort project, but it did what it needed to do for me. In my opinion it's better than most of the existing plugin options that exists (I did try most of them)._
 
 ## Install (unpacked / developer mode)
 
