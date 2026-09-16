@@ -553,6 +553,7 @@
           done: job.done,
           failed: job.failed,
           total: job.total,
+          errors: job.errors,
           zipNames: job.zipNames,
         });
       }

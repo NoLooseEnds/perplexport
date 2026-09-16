@@ -300,6 +300,9 @@ async function sendOffscreenDownload(payload, attempts = 4) {
       if (!created?.ok || !created.url) {
         throw new Error(created?.error || "Offscreen blob URL creation failed.");
       }
+      if (!String(created.url).startsWith("blob:")) {
+        throw new Error("Offscreen returned a non-blob URL.");
+      }
       objectUrl = created.url;
 
       // chrome.downloads is only available in the service worker — not offscreen

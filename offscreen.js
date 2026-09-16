@@ -5,10 +5,9 @@
 const liveUrls = new Set();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (sender.tab) {
-    // Content scripts must not drive offscreen blob creation
-    return false;
-  }
+  // Only this extension — never tab content scripts
+  if (sender.tab) return false;
+  if (sender.id != null && sender.id !== chrome.runtime.id) return false;
 
   if (message?.type === "pplx-offscreen-create-url") {
     try {
