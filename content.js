@@ -15,6 +15,7 @@
   let bulkPollTimer = null;
   const BULK_JOB_KEY = "pplxBulkJob";
   const BULK_LIST_CACHE_KEY = "pplxBulkListCache";
+  const BULK_ERRORS_KEY = "pplxBulkLastErrors";
   const MAX_INLINE_EXPORT_CHARS = 1_500_000;
   const MAX_SESSION_EXPORT_CHARS = 8_000_000;
 
@@ -348,12 +349,148 @@
     if (!panel) return;
     const start = panel.querySelector(".pplx-bulk-start");
     const cancel = panel.querySelector(".pplx-bulk-cancel");
+    const retry = ensureRetryButton(panel);
     if (start) start.disabled = Boolean(running);
     if (cancel) {
       if (running) cancel.removeAttribute("hidden");
       else cancel.setAttribute("hidden", "");
       cancel.disabled = false;
     }
+    syncRetryButton();
+    if (running && retry) retry.disabled = true;
+  }
+
+  function ensureRetryButton(panel) {
+    if (!panel) return null;
+    let btn = panel.querySelector(".pplx-bulk-retry");
+    if (btn) return btn;
+    const actions = panel.querySelector(".pplx-bulk-actions");
+    const start = panel.querySelector(".pplx-bulk-start");
+    if (!actions) return null;
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pplx-bulk-retry";
+    btn.hidden = true;
+    btn.textContent = "Retry failed";
+    btn.addEventListener("click", () => {
+      retryFailedExport().catch((err) => {
+        toast(err?.message || "Retry failed", true);
+      });
+    });
+    if (start?.nextSibling) actions.insertBefore(btn, start.nextSibling);
+    else if (start) start.after(btn);
+    else actions.appendChild(btn);
+    return btn;
+  }
+
+  function syncRetryButton() {
+    const panel = document.getElementById(BULK_ID);
+    if (!panel) return;
+    const btn = ensureRetryButton(panel);
+    if (!btn) return;
+    const errors = (panel._lastErrors || []).filter((e) => e?.url);
+    if (!errors.length || bulkBusy || bulkListBusy) {
+      btn.hidden = true;
+      btn.disabled = true;
+      return;
+    }
+    btn.hidden = false;
+    btn.disabled = false;
+    btn.textContent = `Retry failed (${errors.length})`;
+  }
+
+  async function rememberFailedErrors(errors) {
+    const list = (errors || [])
+      .filter((e) => e?.url)
+      .map((e) => ({
+        url: e.url,
+        title: e.title || "",
+        date: e.date || null,
+        projectTag: e.projectTag || null,
+        files: Array.isArray(e.files) ? e.files.slice(0, 40) : [],
+        error: e.error || "",
+      }));
+    const panel = document.getElementById(BULK_ID);
+    if (panel) panel._lastErrors = list;
+    try {
+      if (list.length) {
+        await chrome.storage.session.set({
+          [BULK_ERRORS_KEY]: { errors: list, savedAt: Date.now() },
+        });
+      } else {
+        await chrome.storage.session.remove(BULK_ERRORS_KEY);
+      }
+    } catch {
+      // ignore
+    }
+    syncRetryButton();
+  }
+
+  async function restoreFailedErrors(panel) {
+    if (!panel || panel._lastErrors?.length) {
+      syncRetryButton();
+      return;
+    }
+    try {
+      const data = await chrome.storage.session.get(BULK_ERRORS_KEY);
+      const cached = data[BULK_ERRORS_KEY];
+      if (!cached?.errors?.length) return;
+      if (Date.now() - (cached.savedAt || 0) > 24 * 60 * 60 * 1000) return;
+      panel._lastErrors = cached.errors;
+      syncRetryButton();
+    } catch {
+      // ignore
+    }
+  }
+
+  function selectThreadsByUrls(panel, urls) {
+    if (!panel || !urls?.length) return;
+    const want = new Set(urls.filter(Boolean));
+    const threads = panel._bulkData?.threads || [];
+    panel.querySelectorAll('.pplx-bulk-list input[type="checkbox"]').forEach((el) => {
+      const thread = threads[Number(el.dataset.index)];
+      el.checked = Boolean(thread?.url && want.has(thread.url));
+    });
+  }
+
+  function resolveRetryThreads(panel, errors) {
+    const byUrl = new Map();
+    for (const t of panel._bulkData?.threads || []) {
+      if (t?.url) byUrl.set(t.url, t);
+    }
+    return (errors || [])
+      .filter((e) => e?.url)
+      .map((e) => {
+        const full = byUrl.get(e.url);
+        return {
+          title: full?.title || e.title || "",
+          url: e.url,
+          date: full?.date || e.date || null,
+          projectTag: full?.projectTag || e.projectTag || null,
+          files: full?.files?.length
+            ? full.files
+            : Array.isArray(e.files)
+              ? e.files
+              : [],
+        };
+      });
+  }
+
+  async function retryFailedExport() {
+    if (bulkBusy) return;
+    const panel = ensureBulkUi();
+    if (!panel) return;
+    const errors = panel._lastErrors || [];
+    const threads = resolveRetryThreads(panel, errors);
+    if (!threads.length) {
+      toast("No failed threads to retry", true);
+      return;
+    }
+    selectThreadsByUrls(
+      panel,
+      threads.map((t) => t.url)
+    );
+    await startBulkExport({ threads });
   }
 
   function stopBulkPoll() {
@@ -516,9 +653,10 @@
           <button type="button" class="pplx-bulk-refresh">Refresh list</button>
           <button type="button" class="pplx-bulk-resolve">Find missing</button>
           <button type="button" class="pplx-bulk-start">Start export</button>
+          <button type="button" class="pplx-bulk-retry" hidden>Retry failed</button>
           <button type="button" class="pplx-bulk-cancel" hidden>Cancel</button>
         </div>
-        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (~10&nbsp;MB of content each). From Library, files are grouped into project folders (plus <code>uncategorized</code>). “Find missing” uses the list already loaded (no re-scroll) and briefly opens rows without links.</p>
+        <p class="pplx-bulk-hint">Choose a format, then start. Large exports auto-split into several <strong>ZIP</strong>s (~10&nbsp;MB of content each). From Library, files are grouped into project folders (plus <code>uncategorized</code>). “Find missing” uses the list already loaded. After a run, <strong>Retry failed</strong> re-exports only the threads that errored.</p>
       </div>
     `;
     document.documentElement.appendChild(panel);
@@ -561,9 +699,16 @@
       });
     });
     start.addEventListener("click", () => startBulkExport());
+    const retry = panel.querySelector(".pplx-bulk-retry");
+    retry?.addEventListener("click", () => {
+      retryFailedExport().catch((err) => {
+        toast(err?.message || "Retry failed", true);
+      });
+    });
     cancel.addEventListener("click", () => cancelBulkExport());
 
     syncBulkFormatUi();
+    restoreFailedErrors(panel).catch(() => {});
     return panel;
   }
 
@@ -866,20 +1011,24 @@
     }
   }
 
-  async function startBulkExport() {
+  async function startBulkExport(options = {}) {
     if (bulkBusy) return;
     const panel = ensureBulkUi();
     if (!panel) return;
     const data = panel._bulkData;
-    if (!data?.threads?.length) {
-      toast("No threads in the list", true);
-      return;
-    }
 
-    const selected = Array.from(
-      panel.querySelectorAll('.pplx-bulk-list input[type="checkbox"]:checked')
-    ).map((el) => data.threads[Number(el.dataset.index)])
-      .filter(Boolean);
+    let selected = options.threads || null;
+    if (!selected) {
+      if (!data?.threads?.length) {
+        toast("No threads in the list", true);
+        return;
+      }
+      selected = Array.from(
+        panel.querySelectorAll('.pplx-bulk-list input[type="checkbox"]:checked')
+      )
+        .map((el) => data.threads[Number(el.dataset.index)])
+        .filter(Boolean);
+    }
 
     if (!selected.length) {
       toast("Select at least one thread", true);
@@ -890,11 +1039,16 @@
     setBulkRunningUi(true);
     startBulkPoll();
     const status = panel.querySelector(".pplx-bulk-status");
-    status.textContent = `Starting bulk (${selected.length})…`;
+    const label = options.threads ? "Retrying" : "Starting bulk";
+    status.textContent = `${label} (${selected.length})…`;
     setBulkProgress({ current: 0, total: selected.length, visible: true });
 
     try {
-      const folder = slugifyFolder(data.project.name);
+      const folder = slugifyFolder(
+        options.threads
+          ? `${data?.project?.name || "library"}-retry`
+          : data?.project?.name || "library"
+      );
       const format = getBulkFormat();
       await saveDefaultFormat(format);
       const result = await chrome.runtime.sendMessage({
@@ -902,13 +1056,17 @@
         threads: selected,
         format,
         folder,
-        projectName: data.project?.name || null,
-        projectUrl: data.project?.url || null,
-        groupByProject: data.project?.kind === "library",
+        projectName: data?.project?.name || null,
+        projectUrl: data?.project?.url || null,
+        groupByProject: data?.project?.kind === "library",
       });
       if (!result?.ok) throw new Error(result?.error || "Bulk start failed");
       status.textContent = `Exporting 0/${selected.length}…`;
-      toast(`Bulk started (${selected.length} threads, ${format})`);
+      toast(
+        options.threads
+          ? `Retrying ${selected.length} failed thread(s)`
+          : `Bulk started (${selected.length} threads, ${format})`
+      );
     } catch (err) {
       status.textContent = err.message || "Bulk failed";
       toast(err.message || "Bulk failed", true);
@@ -1007,6 +1165,13 @@
       }
       status.textContent = text;
       toast(text, Boolean(message.failed));
+      rememberFailedErrors(message.errors || []).catch(() => {});
+      if (message.errors?.length) {
+        selectThreadsByUrls(
+          panel,
+          message.errors.map((e) => e.url)
+        );
+      }
       return;
     }
     if (message.status === "zipping") {
@@ -1031,6 +1196,14 @@
           ? message.error || "Cancelled"
           : message.error || "Bulk failed";
       toast(status.textContent, true);
+      // Keep any per-thread failures so Retry failed still works after a crash
+      if (message.errors?.length) {
+        rememberFailedErrors(message.errors).catch(() => {});
+        selectThreadsByUrls(
+          panel,
+          message.errors.map((e) => e.url)
+        );
+      }
       return;
     }
 
@@ -1093,6 +1266,7 @@
         if (kind === "bulk" && !bulk._bulkData && !bulkListBusy) {
           restoreBulkListFromCache(bulk).catch(() => {});
         }
+        restoreFailedErrors(bulk).catch(() => {});
       }
     } else {
       removeBulkUi();
@@ -1184,6 +1358,7 @@
           done: job.done,
           failed: job.failed,
           total: job.total,
+          errors: job.errors,
         });
       } else if (job.status === "error" || job.status === "cancelled") {
         const finished = Date.parse(job.finishedAt || "") || 0;
@@ -1196,7 +1371,11 @@
             total: job.total,
             errors: job.errors,
           });
+        } else if (job.errors?.length) {
+          rememberFailedErrors(job.errors).catch(() => {});
         }
+      } else if (job.status === "done" && job.errors?.length) {
+        rememberFailedErrors(job.errors).catch(() => {});
       }
     } catch {
       // ignore

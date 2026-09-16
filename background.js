@@ -727,6 +727,9 @@ async function runBulkJob(job) {
         errors.push({
           url: thread.url,
           title: thread.title,
+          date: thread.date || null,
+          projectTag: thread.projectTag || null,
+          files: Array.isArray(thread.files) ? thread.files.slice() : [],
           error: err?.message || String(err),
         });
       } finally {

@@ -412,6 +412,16 @@
   border-color: transparent !important;
 }
 
+#pplx-export-bulk .pplx-bulk-retry {
+  background: #fff7ed !important;
+  color: #9a3412 !important;
+  border-color: #fdba74 !important;
+}
+
+#pplx-export-bulk .pplx-bulk-retry[hidden] {
+  display: none !important;
+}
+
 #pplx-export-bulk .pplx-bulk-cancel {
   color: #b42318 !important;
   border-color: #f5c2c0 !important;
